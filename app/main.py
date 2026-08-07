@@ -4,14 +4,22 @@ from sqlalchemy.orm import Session
 import os
 from datetime import timedelta
 
+from fastapi.staticfiles import StaticFiles
 from app.db.database import SessionLocal, engine
 from app.db import models
 from app import crud, schemas
 from app.utils.security import authenticate_user, create_access_token
+from app.tasks import process_build
 
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="M1 OS Nexus - Master API (skeleton)")
+
+# Serve artifacts folder as static
+ARTIFACTS_DIR = os.path.join(os.path.dirname(__file__), 'static', 'artifacts')
+if not os.path.exists(ARTIFACTS_DIR):
+    os.makedirs(ARTIFACTS_DIR, exist_ok=True)
+app.mount('/artifacts', StaticFiles(directory=ARTIFACTS_DIR), name='artifacts')
 
 
 def get_db():
@@ -59,7 +67,12 @@ def create_app(app_in: schemas.AppCreate, db: Session = Depends(get_db)):
 def request_apk_build(build_in: schemas.BuildCreate, db: Session = Depends(get_db)):
     # In production: check user tier, enqueue background build job, return job id
     build = crud.create_build(db, build_in)
-    # Pretend we enqueue a build here
+    # Enqueue background build task
+    try:
+        process_build.delay(build.id)
+    except Exception:
+        # If Celery not available, we leave the build pending but still return
+        pass
     return build
 
 
